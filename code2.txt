@@ -1,0 +1,250 @@
+#include <iostream>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+#include <tchar.h>
+#include <thread>
+#include <vector>
+
+
+using namespace std;
+
+#pragma comment(lib, "ws2_32.lib")
+
+typedef struct
+{
+	SOCKET client;
+	string username;
+}dict;
+
+
+bool initialize() // initialization
+{
+	WSADATA data;
+	return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+}
+
+void print_serveraddr(const string hostname)
+{
+	addrinfo hints = { 0 };    //inialize a struct addrinfo to values of 0
+	addrinfo* res = nullptr;   //pointer to addrinfo, will store the result
+
+	hints.ai_family = AF_INET; //for ipv4
+	hints.ai_socktype = SOCK_STREAM; //for TCP connections
+
+	if (getaddrinfo(hostname.c_str(), nullptr, &hints, &res) != 0) //If getaddrinfo does not run correctly
+	{
+		cout << "Failure while getting server address: " << WSAGetLastError << endl;
+		return;
+	}
+
+	for (addrinfo* p = res; p != nullptr; p = p->ai_next)  //go through the res pointer
+	{
+		sockaddr_in* addr = reinterpret_cast<sockaddr_in*>(p->ai_addr);
+		char ip[INET_ADDRSTRLEN]; //list of char(string) thatll store the address
+		inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof ip);
+		cout << "Server ip address: " << ip << endl;
+	}
+
+	freeaddrinfo(res); //free memory used by res
+
+}
+
+void timed_msg(SOCKET client_socket, vector<dict>& clients, string message, size_t pos, string receiver_name)
+{
+	/*size_t ps = message.find(":");
+	string receiver_name = message.substr(0, ps);*/
+	string time = message.substr(pos + 6);
+	time = time.substr(0, 24);
+	//cout << "Chosen time: " << time << endl;
+
+	while (true)
+	{
+		auto now = std::chrono::system_clock::now();
+		std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
+
+		std::tm localTime;
+		localtime_s(&localTime, &currentTime);
+
+		char timeString[26];
+
+		std::strftime(timeString, sizeof(timeString), "%c", &localTime);
+
+		//std::cout << "Current time: " << timeString << endl;
+
+
+		if (timeString == time)
+		{
+			for (auto client : clients)
+			{
+				if (client.username == receiver_name)
+				{
+					size_t p = message.find(":");
+					message = message.substr(0, p + 1) + message.substr(31 + p + 1);
+					send(client.client, message.c_str(), message.length(), 0);
+				}
+			}
+			break;
+		}
+
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+	}
+
+}
+
+//void getname(SOCKET client_socket, vector<dict>& clients)
+//{
+//	while (true)
+//	{
+//		char buffer[4096];
+//		int bytesreceived = recv(client_socket, buffer, sizeof buffer, 0);
+//		string username(buffer, bytesreceived);
+//
+//		cout << username << endl;
+//		clients.push_back({ client_socket, username });
+//	}
+//
+//}
+
+void send_receive(SOCKET client_socket, vector<dict>& clients)
+{
+	bool running = true;
+	char buffer[4096];
+	//int bytesreceived = recv(client_socket, buffer, sizeof buffer, 0);
+	//string username(buffer, bytesreceived);
+	////cout << username << endl;
+	//clients.push_back({ client_socket, username });
+
+
+	while (running == true)
+	{
+		int bytesreceived = recv(client_socket, buffer, sizeof buffer, 0);
+
+		if (bytesreceived <= 0)
+		{
+			cout << "Client disconnected..." << endl;
+			break;
+		}
+
+		std::string message(buffer, bytesreceived);
+		if (message.find(":") == string::npos)
+		{
+			string username = message;
+			cout << username << endl;
+			clients.push_back({ client_socket, username });
+			continue;
+		}
+		size_t p = message.find(":");
+		string receiver_name = message.substr(0, p);
+		cout << "[" + receiver_name + "]" << endl;
+		message = message.substr(p + 1);
+		std::cout << "Message received: " << message << std::endl;
+		size_t pos = message.find("TIME: ");
+		if (!(pos != string::npos))
+		{
+			for (auto client : clients)
+			{
+				cout << "[" + client.username + "]" << endl;
+				if (client.username == receiver_name)
+				{
+					send(client.client, message.c_str(), message.length(), 0);
+				}
+			}
+		}
+		else
+		{
+			thread timed_messg(timed_msg, client_socket, std::ref(clients), message, pos, receiver_name);
+			timed_messg.detach();
+
+		}
+	}
+
+	auto it = find_if(clients.begin(), clients.end(), [client_socket](const dict& d) { return d.client == client_socket; });
+	if (it != clients.end())
+	{
+		clients.erase(it);
+	}
+
+	closesocket(client_socket);
+}
+
+int main()
+{
+
+	if (!initialize())
+	{
+		cout << "Winsock initialization failed..." << endl; // checking for errors
+		return -1;
+	}
+	cout << "Server" << endl;
+
+	SOCKET listen_socket = socket(AF_INET, SOCK_STREAM, 0); // creation of socket
+	if (listen_socket == INVALID_SOCKET)
+	{
+		cout << "Socket creation failed..." << endl;
+		return -1;
+	}
+
+	sockaddr_in serveraddr; // creating address
+	int port = 12345;
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_port = htons(port);
+
+	if (InetPton(AF_INET, _T("0.0.0.0"), &serveraddr.sin_addr) != 1)
+	{
+		cout << "Setting address failed..." << endl;
+		closesocket(listen_socket);
+		WSACleanup();
+		return -1;
+
+	}
+
+	if (bind(listen_socket, reinterpret_cast<sockaddr*>(&serveraddr), sizeof serveraddr) == SOCKET_ERROR)
+	{
+		cout << "Bind failed..." << endl; // binding the socket
+		closesocket(listen_socket);
+		WSACleanup();
+		return -1;
+	}
+
+	if (listen(listen_socket, SOMAXCONN) == SOCKET_ERROR)
+	{
+		cout << "Listen failed... " << endl; // error during binding
+		closesocket(listen_socket);
+		WSACleanup();
+		return -1;
+
+	}
+
+	cout << "Socket has started listening on port..." << endl;
+
+	string hostname = "DESKTOP-39N5UHM";
+	print_serveraddr(hostname);
+
+	vector<dict> clients;
+
+	while (true)
+	{
+
+		SOCKET client_socket = accept(listen_socket, nullptr, nullptr);
+
+		if (client_socket == INVALID_SOCKET)
+		{
+			cout << "Invalid client socket" << endl;
+		}
+		cout << "Client socket: " << client_socket << endl;
+		//getname(client_socket, clients);
+		//thread t(getname, client_socket, std::ref(clients));
+		//t.detach();
+
+		//clients.push_back(client_socket);
+
+		thread t1(send_receive, client_socket, std::ref(clients));
+		t1.detach();
+	}
+
+	closesocket(listen_socket);
+
+	WSACleanup();
+
+	return 0;
+}
