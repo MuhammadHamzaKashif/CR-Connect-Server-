@@ -1,0 +1,17 @@
+# Build output
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.recipe
+Debug/
+Release/
+x64/
+chat/x64/
+
+# Visual Studio user files
+*.user
+*.vcxproj.user
+
+# Local database
+*.db
